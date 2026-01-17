@@ -1,6 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
+// GET /api/campaigns/[id]/contacts - Get campaign contacts
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+
+    const campaignContacts = await prisma.campaignContact.findMany({
+      where: { campaignId: id },
+      include: {
+        contact: {
+          include: {
+            company: true,
+          },
+        },
+      },
+      orderBy: { enrolledAt: 'desc' },
+    })
+
+    return NextResponse.json(campaignContacts)
+  } catch (error) {
+    console.error('Error getting campaign contacts:', error)
+    return NextResponse.json(
+      { error: 'Error al obtener contactos de la campana' },
+      { status: 500 }
+    )
+  }
+}
+
 // POST /api/campaigns/[id]/contacts - Add contacts to campaign
 export async function POST(
   request: NextRequest,

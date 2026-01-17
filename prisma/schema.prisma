@@ -96,8 +96,16 @@ model Campaign {
 
   linkedInAccountId String?
 
-  steps       CampaignStep[]
+  // Flow nodes (new system)
+  nodes       CampaignNode[]
+
+  // Legacy steps (backwards compatibility)
+  steps       CampaignStep[] @relation("CampaignSteps")
   contacts    CampaignContact[]
+
+  // Campaign-level prompts
+  productPrompt     String?  @db.Text  // Describe your product/service
+  instructionsPrompt String? @db.Text  // Instructions for the AI
 
   // Configuración
   timezone    String    @default("Europe/Madrid")
@@ -145,25 +153,126 @@ enum CampaignStatus {
   ARCHIVED
 }
 
-// ==================== PASOS DE CAMPAÑA ====================
-model CampaignStep {
+// ==================== NODOS DE CAMPAÑA (FLOW) ====================
+model CampaignNode {
   id          String   @id @default(cuid())
   campaignId  String
   campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  order       Int
+  nodeType    NodeType
+  title       String
+
+  // Configuración del nodo (JSON flexible)
+  config      Json?    // { mode: 'ai'|'manual'|'always', prompt: string, etc }
+
+  // Para nodos de delay
+  delayValue  Int?
+  delayUnit   DelayUnit?
+
+  // Para nodos de acción (email/mensaje)
+  subject     String?
+  body        String?  @db.Text
+
+  // Condiciones
+  conditions  Json?    // { onlyIfNoReply: true, onlyIfNoOpen: false, etc }
+
+  // Estadísticas
+  totalExecuted Int @default(0)
+  totalSuccess  Int @default(0)
+  totalFailed   Int @default(0)
+
+  executions  CampaignNodeExecution[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([campaignId, order])
+  @@index([campaignId])
+}
+
+enum NodeType {
+  TRIGGER_START
+  ACTION_EMAIL
+  ACTION_LINKEDIN_CONNECT
+  ACTION_LINKEDIN_MESSAGE
+  ACTION_INSTAGRAM_DM
+  DELAY
+  CONDITION
+  MANUAL_TASK
+}
+
+enum DelayUnit {
+  MINUTES
+  HOURS
+  DAYS
+}
+
+// ==================== EJECUCIÓN DE NODOS ====================
+model CampaignNodeExecution {
+  id                String   @id @default(cuid())
+  campaignContactId String
+  campaignContact   CampaignContact @relation(fields: [campaignContactId], references: [id], onDelete: Cascade)
+  nodeId            String
+  node              CampaignNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  status            ExecutionStatus @default(PENDING)
+
+  // Datos de ejecución
+  executedAt        DateTime?
+  scheduledFor      DateTime?
+  completedAt       DateTime?
+
+  // Para emails/mensajes enviados
+  subject           String?
+  body              String?  @db.Text
+  messageId         String?
+
+  // Tracking
+  openedAt          DateTime?
+  clickedAt         DateTime?
+  repliedAt         DateTime?
+  bouncedAt         DateTime?
+  bounceReason      String?
+
+  // Error handling
+  errorMessage      String?
+  retryCount        Int      @default(0)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([campaignContactId])
+  @@index([nodeId])
+  @@index([status])
+  @@index([scheduledFor])
+}
+
+enum ExecutionStatus {
+  PENDING
+  SCHEDULED
+  EXECUTING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+// Legacy support - keeping for backwards compatibility
+model CampaignStep {
+  id          String   @id @default(cuid())
+  campaignId  String
+  campaign    Campaign @relation("CampaignSteps", fields: [campaignId], references: [id], onDelete: Cascade)
 
   order       Int
   type        StepType @default(EMAIL)
   subject     String?
   body        String   @db.Text
 
-  // Tiempo de espera antes de este paso (en días)
   delayDays   Int      @default(0)
 
-  // Condiciones
   sendOnlyIfNoReply  Boolean @default(true)
   sendOnlyIfNoOpen   Boolean @default(false)
 
-  // Estadísticas
   totalSent   Int @default(0)
   totalOpened Int @default(0)
   totalClicked Int @default(0)
@@ -193,24 +302,27 @@ model CampaignContact {
   contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   status      CampaignContactStatus @default(ACTIVE)
-  currentStep Int      @default(0)
+  currentNodeOrder Int @default(0)  // Track which node they're on
 
   // Variables personalizadas para este contacto
   customVariables Json?
 
   // Fechas
   enrolledAt  DateTime @default(now())
-  nextSendAt  DateTime?
+  nextActionAt DateTime?  // When the next action should execute
   completedAt DateTime?
 
   // Razón de pausa/unsubscribe
   pauseReason String?
 
-  emailsSent  EmailSent[]
+  // Relations
+  emailsSent      EmailSent[]
+  nodeExecutions  CampaignNodeExecution[]
 
   @@unique([campaignId, contactId])
   @@index([status])
-  @@index([nextSendAt])
+  @@index([nextActionAt])
+  @@index([campaignId, status])
 }
 
 enum CampaignContactStatus {

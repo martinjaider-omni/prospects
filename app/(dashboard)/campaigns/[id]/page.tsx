@@ -19,6 +19,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Checkbox } from '@/components/ui/checkbox'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -48,6 +56,10 @@ import {
   Plus,
   Trash2,
   GripVertical,
+  Users,
+  UserPlus,
+  Search,
+  Building2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { format, formatDistanceToNow } from 'date-fns'
@@ -78,7 +90,23 @@ interface FlowNode {
   prompt?: string
   delayValue?: number
   delayUnit?: 'minutes' | 'hours' | 'days'
+  subject?: string
+  body?: string
   order: number
+}
+
+interface CampaignNode {
+  id: string
+  campaignId: string
+  order: number
+  nodeType: string
+  title: string
+  config: { mode?: string; prompt?: string } | null
+  delayValue: number | null
+  delayUnit: string | null
+  subject: string | null
+  body: string | null
+  conditions: Record<string, any> | null
 }
 
 interface Activity {
@@ -90,6 +118,40 @@ interface Activity {
   account: string
   timestamp: Date
   platform: string
+}
+
+interface CampaignContact {
+  id: string
+  campaignId: string
+  contactId: string
+  status: string
+  currentStep: number
+  currentNodeOrder: number | null
+  enrolledAt: string
+  contact: {
+    id: string
+    firstName: string
+    lastName: string
+    email: string | null
+    phone: string | null
+    linkedinUrl: string | null
+    jobTitle: string | null
+    company: {
+      name: string
+      website: string | null
+    } | null
+  }
+}
+
+interface AvailableContact {
+  id: string
+  firstName: string
+  lastName: string
+  email: string | null
+  jobTitle: string | null
+  company: {
+    name: string
+  } | null
 }
 
 const platformConfig: Record<string, { icon: React.ElementType; label: string; color: string; bgColor: string }> = {
@@ -193,6 +255,9 @@ export default function CampaignDetailPage() {
   // Flow editor state
   const [flowNodes, setFlowNodes] = useState<FlowNode[]>([])
   const [editingPrompts, setEditingPrompts] = useState(false)
+  const [savingNodes, setSavingNodes] = useState(false)
+  const [nodesLoaded, setNodesLoaded] = useState(false)
+  const [statusLoading, setStatusLoading] = useState(false)
 
   // Filters
   const [contactFilter, setContactFilter] = useState('all')
@@ -203,17 +268,44 @@ export default function CampaignDetailPage() {
   const [upcomingPage, setUpcomingPage] = useState(1)
   const itemsPerPage = 5
 
+  // Leads tab state
+  const [campaignContacts, setCampaignContacts] = useState<CampaignContact[]>([])
+  const [availableContacts, setAvailableContacts] = useState<AvailableContact[]>([])
+  const [loadingContacts, setLoadingContacts] = useState(false)
+  const [showAddContactsModal, setShowAddContactsModal] = useState(false)
+  const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set())
+  const [addingContacts, setAddingContacts] = useState(false)
+  const [contactSearch, setContactSearch] = useState('')
+
   const fetchCampaign = useCallback(async () => {
     setLoading(true)
     try {
-      const response = await fetch(`/api/campaigns/${campaignId}`)
-      if (!response.ok) throw new Error('Campaign not found')
-      const data = await response.json()
+      // Fetch campaign and nodes in parallel
+      const [campaignRes, nodesRes] = await Promise.all([
+        fetch(`/api/campaigns/${campaignId}`),
+        fetch(`/api/campaigns/${campaignId}/nodes`)
+      ])
+
+      if (!campaignRes.ok) throw new Error('Campaign not found')
+      const data = await campaignRes.json()
       setCampaign(data)
 
-      // Initialize flow nodes based on platform
-      const defaultNodes = getDefaultFlowNodes(data.platform)
-      setFlowNodes(defaultNodes)
+      // Load existing nodes or use defaults
+      let nodes: FlowNode[] = []
+      if (nodesRes.ok) {
+        const nodesData: CampaignNode[] = await nodesRes.json()
+        if (nodesData && nodesData.length > 0) {
+          nodes = nodesData.map(dbNodeToFlowNode)
+          setNodesLoaded(true)
+        }
+      }
+
+      // If no nodes saved, initialize with defaults
+      if (nodes.length === 0) {
+        nodes = getDefaultFlowNodes(data.platform)
+      }
+
+      setFlowNodes(nodes)
     } catch (error) {
       toast.error('Error al cargar la campana')
       router.push('/campaigns')
@@ -221,6 +313,45 @@ export default function CampaignDetailPage() {
       setLoading(false)
     }
   }, [campaignId, router])
+
+  // Convert database node to FlowNode
+  const dbNodeToFlowNode = (dbNode: CampaignNode): FlowNode => {
+    const nodeTypeMap: Record<string, FlowNode['type']> = {
+      'TRIGGER_START': 'trigger',
+      'ACTION_EMAIL': 'action',
+      'ACTION_LINKEDIN_CONNECT': 'action',
+      'ACTION_LINKEDIN_MESSAGE': 'action',
+      'ACTION_INSTAGRAM_DM': 'action',
+      'DELAY': 'delay',
+      'CONDITION': 'condition',
+      'MANUAL_TASK': 'action',
+    }
+
+    const nodeTypeToFrontend: Record<string, string> = {
+      'TRIGGER_START': 'on_start_contact',
+      'ACTION_EMAIL': 'send_email',
+      'ACTION_LINKEDIN_CONNECT': 'send_linkedin_invitation',
+      'ACTION_LINKEDIN_MESSAGE': 'conversation_introduction',
+      'ACTION_INSTAGRAM_DM': 'send_instagram_dm',
+      'DELAY': 'delay',
+      'CONDITION': 'condition',
+      'MANUAL_TASK': 'manual_task',
+    }
+
+    return {
+      id: dbNode.id,
+      type: nodeTypeMap[dbNode.nodeType] || 'action',
+      nodeType: nodeTypeToFrontend[dbNode.nodeType] || dbNode.nodeType,
+      title: dbNode.title,
+      mode: (dbNode.config?.mode as FlowNode['mode']) || 'always',
+      prompt: dbNode.config?.prompt || dbNode.body || '',
+      delayValue: dbNode.delayValue || undefined,
+      delayUnit: dbNode.delayUnit?.toLowerCase() as FlowNode['delayUnit'],
+      subject: dbNode.subject || undefined,
+      body: dbNode.body || undefined,
+      order: dbNode.order,
+    }
+  }
 
   // Get default flow nodes based on platform
   const getDefaultFlowNodes = (platform: string): FlowNode[] => {
@@ -308,20 +439,196 @@ export default function CampaignDetailPage() {
     fetchCampaign()
   }, [fetchCampaign])
 
+  // Save nodes to database
+  const saveNodes = useCallback(async (nodes: FlowNode[]) => {
+    if (!campaignId) return
+
+    setSavingNodes(true)
+    try {
+      const nodesToSave = nodes.map((node, index) => ({
+        order: index,
+        nodeType: node.nodeType,
+        title: node.title,
+        config: {
+          mode: node.mode,
+          prompt: node.prompt,
+        },
+        delayValue: node.delayValue,
+        delayUnit: node.delayUnit,
+        subject: node.subject,
+        body: node.body || node.prompt,
+      }))
+
+      const response = await fetch(`/api/campaigns/${campaignId}/nodes`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodes: nodesToSave }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to save nodes')
+      }
+
+      setNodesLoaded(true)
+    } catch (error) {
+      console.error('Error saving nodes:', error)
+      toast.error('Error al guardar el flujo')
+    } finally {
+      setSavingNodes(false)
+    }
+  }, [campaignId])
+
+  // Auto-save nodes when they change (debounced)
+  useEffect(() => {
+    if (flowNodes.length === 0 || loading) return
+
+    const timeout = setTimeout(() => {
+      saveNodes(flowNodes)
+    }, 1000) // Debounce 1 second
+
+    return () => clearTimeout(timeout)
+  }, [flowNodes, saveNodes, loading])
+
+  // Fetch campaign contacts when switching to leads tab
+  const fetchCampaignContacts = useCallback(async () => {
+    if (!campaignId) return
+
+    setLoadingContacts(true)
+    try {
+      const response = await fetch(`/api/campaigns/${campaignId}/contacts`)
+      if (response.ok) {
+        const data = await response.json()
+        setCampaignContacts(data)
+      }
+    } catch (error) {
+      console.error('Error fetching campaign contacts:', error)
+    } finally {
+      setLoadingContacts(false)
+    }
+  }, [campaignId])
+
+  // Fetch available contacts (not in campaign)
+  const fetchAvailableContacts = useCallback(async () => {
+    try {
+      const response = await fetch('/api/contacts')
+      if (response.ok) {
+        const data = await response.json()
+        const enrolledIds = new Set(campaignContacts.map(cc => cc.contactId))
+        const available = data.filter((c: AvailableContact) => !enrolledIds.has(c.id))
+        setAvailableContacts(available)
+      }
+    } catch (error) {
+      console.error('Error fetching available contacts:', error)
+    }
+  }, [campaignContacts])
+
+  // Load contacts when switching to leads tab
+  useEffect(() => {
+    if (activeTab === 'leads' && campaignId) {
+      fetchCampaignContacts()
+    }
+  }, [activeTab, campaignId, fetchCampaignContacts])
+
+  // Load available contacts when opening modal
+  useEffect(() => {
+    if (showAddContactsModal) {
+      fetchAvailableContacts()
+    }
+  }, [showAddContactsModal, fetchAvailableContacts])
+
+  // Add contacts to campaign
+  const handleAddContacts = async () => {
+    if (selectedContactIds.size === 0) return
+
+    setAddingContacts(true)
+    try {
+      const response = await fetch(`/api/campaigns/${campaignId}/contacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactIds: Array.from(selectedContactIds) }),
+      })
+
+      if (!response.ok) throw new Error('Failed to add contacts')
+
+      const result = await response.json()
+      toast.success(`${result.added} contactos agregados a la campana`)
+
+      setShowAddContactsModal(false)
+      setSelectedContactIds(new Set())
+      fetchCampaignContacts()
+    } catch (error) {
+      toast.error('Error al agregar contactos')
+    } finally {
+      setAddingContacts(false)
+    }
+  }
+
+  // Remove contact from campaign
+  const handleRemoveContact = async (contactId: string) => {
+    try {
+      const response = await fetch(`/api/campaigns/${campaignId}/contacts`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactIds: [contactId] }),
+      })
+
+      if (!response.ok) throw new Error('Failed to remove contact')
+
+      toast.success('Contacto eliminado de la campana')
+      fetchCampaignContacts()
+    } catch (error) {
+      toast.error('Error al eliminar contacto')
+    }
+  }
+
+  // Toggle contact selection
+  const toggleContactSelection = (contactId: string) => {
+    const newSelected = new Set(selectedContactIds)
+    if (newSelected.has(contactId)) {
+      newSelected.delete(contactId)
+    } else {
+      newSelected.add(contactId)
+    }
+    setSelectedContactIds(newSelected)
+  }
+
+  // Filter available contacts by search
+  const filteredAvailableContacts = availableContacts.filter(contact => {
+    if (!contactSearch) return true
+    const search = contactSearch.toLowerCase()
+    const fullName = `${contact.firstName} ${contact.lastName}`.toLowerCase()
+    return fullName.includes(search) ||
+      contact.email?.toLowerCase().includes(search) ||
+      contact.company?.name.toLowerCase().includes(search)
+  })
+
   const handleToggleStatus = async () => {
     if (!campaign) return
-    const newStatus = campaign.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'
+
+    setStatusLoading(true)
     try {
-      const response = await fetch(`/api/campaigns/${campaignId}`, {
-        method: 'PATCH',
+      // Use the proper start/pause endpoints
+      const endpoint = campaign.status === 'ACTIVE'
+        ? `/api/campaigns/${campaignId}/pause`
+        : `/api/campaigns/${campaignId}/start`
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
       })
-      if (!response.ok) throw new Error('Error')
-      toast.success(`Campaign ${newStatus === 'ACTIVE' ? 'activated' : 'paused'}`)
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Error')
+      }
+
+      toast.success(result.message || `Campana ${campaign.status === 'ACTIVE' ? 'pausada' : 'iniciada'}`)
       fetchCampaign()
-    } catch (error) {
-      toast.error('Error updating status')
+    } catch (error: any) {
+      toast.error(error.message || 'Error al actualizar estado')
+    } finally {
+      setStatusLoading(false)
     }
   }
 
@@ -787,9 +1094,210 @@ export default function CampaignDetailPage() {
     </div>
   )
 
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'ACTIVE':
+        return <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20">Activo</Badge>
+      case 'COMPLETED':
+        return <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20">Completado</Badge>
+      case 'PAUSED':
+        return <Badge variant="outline" className="bg-yellow-500/10 text-yellow-400 border-yellow-500/20">Pausado</Badge>
+      case 'BOUNCED':
+        return <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20">Rebotado</Badge>
+      default:
+        return <Badge variant="outline" className="bg-muted text-muted-foreground">{status}</Badge>
+    }
+  }
+
   const renderLeadsTab = () => (
-    <div className="flex items-center justify-center h-64 text-muted-foreground">
-      Leads management coming soon...
+    <div className="space-y-6">
+      {/* Header with add button */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-foreground">Contactos en la campana</h3>
+          <p className="text-sm text-muted-foreground">
+            {campaignContacts.length} contactos inscritos
+          </p>
+        </div>
+        <Button onClick={() => setShowAddContactsModal(true)}>
+          <UserPlus className="mr-2 h-4 w-4" />
+          Agregar Contactos
+        </Button>
+      </div>
+
+      {/* Contacts list */}
+      {loadingContacts ? (
+        <div className="flex items-center justify-center h-48">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      ) : campaignContacts.length === 0 ? (
+        <div className="flex flex-col items-center justify-center h-48 bg-card rounded-lg border border-border">
+          <Users className="h-12 w-12 text-muted-foreground mb-4" />
+          <p className="text-muted-foreground mb-4">No hay contactos en esta campana</p>
+          <Button variant="outline" onClick={() => setShowAddContactsModal(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Agregar primer contacto
+          </Button>
+        </div>
+      ) : (
+        <div className="bg-card rounded-lg border border-border overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-secondary/50">
+              <tr>
+                <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Contacto</th>
+                <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Empresa</th>
+                <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Estado</th>
+                <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Paso actual</th>
+                <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Inscrito</th>
+                <th className="text-right px-4 py-3 text-sm font-medium text-muted-foreground">Acciones</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {campaignContacts.map((cc) => (
+                <tr key={cc.id} className="hover:bg-accent/50 transition-colors">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <Avatar className="h-8 w-8">
+                        <AvatarFallback className="bg-secondary text-foreground text-xs">
+                          {cc.contact.firstName[0]}{cc.contact.lastName[0]}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <div className="font-medium text-foreground">
+                          {cc.contact.firstName} {cc.contact.lastName}
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          {cc.contact.email || cc.contact.linkedinUrl || 'Sin contacto'}
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm text-foreground">
+                        {cc.contact.company?.name || 'Sin empresa'}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    {getStatusBadge(cc.status)}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="text-sm text-muted-foreground">
+                      Paso {(cc.currentNodeOrder ?? cc.currentStep) + 1} de {flowNodes.length}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="text-sm text-muted-foreground">
+                      {format(new Date(cc.enrolledAt), "d MMM yyyy", { locale: es })}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => router.push(`/contacts/${cc.contact.id}`)}>
+                          Ver contacto
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={() => handleRemoveContact(cc.contactId)}
+                        >
+                          Eliminar de campana
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Add Contacts Modal */}
+      <Dialog open={showAddContactsModal} onOpenChange={setShowAddContactsModal}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Agregar contactos a la campana</DialogTitle>
+          </DialogHeader>
+
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Buscar contactos..."
+              value={contactSearch}
+              onChange={(e) => setContactSearch(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+
+          {/* Selected count */}
+          {selectedContactIds.size > 0 && (
+            <div className="text-sm text-muted-foreground">
+              {selectedContactIds.size} contactos seleccionados
+            </div>
+          )}
+
+          {/* Contacts list */}
+          <ScrollArea className="h-[400px] border rounded-lg">
+            {filteredAvailableContacts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
+                <Users className="h-8 w-8 mb-2" />
+                <p>No hay contactos disponibles</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {filteredAvailableContacts.map((contact) => (
+                  <div
+                    key={contact.id}
+                    className="flex items-center gap-3 p-3 hover:bg-accent/50 cursor-pointer"
+                    onClick={() => toggleContactSelection(contact.id)}
+                  >
+                    <Checkbox
+                      checked={selectedContactIds.has(contact.id)}
+                      onCheckedChange={() => toggleContactSelection(contact.id)}
+                    />
+                    <Avatar className="h-8 w-8">
+                      <AvatarFallback className="bg-secondary text-foreground text-xs">
+                        {contact.firstName[0]}{contact.lastName[0]}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-foreground">
+                        {contact.firstName} {contact.lastName}
+                      </div>
+                      <div className="text-sm text-muted-foreground truncate">
+                        {contact.email || 'Sin email'} · {contact.company?.name || 'Sin empresa'}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+
+          {/* Actions */}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowAddContactsModal(false)}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleAddContacts}
+              disabled={selectedContactIds.size === 0 || addingContacts}
+            >
+              {addingContacts && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Agregar {selectedContactIds.size > 0 ? `(${selectedContactIds.size})` : ''}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 
@@ -835,29 +1343,33 @@ export default function CampaignDetailPage() {
         subtitle={campaign.description || `${platform.label} campaign`}
         actions={
           <div className="flex items-center gap-2">
+            {savingNodes && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Guardando...
+              </div>
+            )}
             <Button
               variant="outline"
               onClick={handleToggleStatus}
+              disabled={statusLoading}
               className="bg-secondary border-border hover:bg-accent"
             >
-              {campaign.status === 'ACTIVE' ? (
-                <>
-                  <Pause className="mr-2 h-4 w-4" />
-                  Pause
-                </>
+              {statusLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : campaign.status === 'ACTIVE' ? (
+                <Pause className="mr-2 h-4 w-4" />
               ) : (
-                <>
-                  <Play className="mr-2 h-4 w-4" />
-                  Start
-                </>
+                <Play className="mr-2 h-4 w-4" />
               )}
+              {campaign.status === 'ACTIVE' ? 'Pausar' : 'Iniciar'}
             </Button>
             <Button
               variant="outline"
               className="bg-secondary border-border hover:bg-accent"
             >
               <Settings className="mr-2 h-4 w-4" />
-              Settings
+              Configuracion
             </Button>
           </div>
         }

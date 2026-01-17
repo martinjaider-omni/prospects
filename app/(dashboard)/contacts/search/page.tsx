@@ -39,6 +39,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { SENIORITY_OPTIONS, DEPARTMENT_OPTIONS } from '@/lib/constants'
+import { ApolloLogo } from '@/components/icons/apollo-logo'
 
 interface ApolloContact {
   firstName: string
@@ -290,8 +291,12 @@ export default function ApolloSearchPage() {
   return (
     <div className="flex flex-col h-full">
       <Header
-        title="Buscar en Apollo"
-        subtitle="Encuentra contactos por empresa y criterios"
+        title="Buscar Contactos"
+        subtitle={
+          <span className="flex items-center gap-2">
+            Powered by <ApolloLogo className="h-4 w-auto inline-block" />
+          </span>
+        }
       />
 
       <div className="flex-1 p-6 space-y-6">

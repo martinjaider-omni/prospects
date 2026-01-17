@@ -36,13 +36,14 @@ import {
   Eye,
   EyeOff,
   Sparkles,
-  Search,
   Linkedin,
   Mail,
   Plus,
   UserCircle,
+  Search,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { ApolloIcon } from '@/components/icons/apollo-logo'
 
 // Gmail icon SVG component
 function GmailIcon({ className }: { className?: string }) {
@@ -579,8 +580,8 @@ function SettingsPageContent() {
             <Card>
               <CardHeader>
                 <div className="flex items-center gap-3">
-                  <div className="rounded-lg bg-purple-500/10 p-2.5">
-                    <Search className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+                  <div className="rounded-lg bg-[#FFB800]/10 p-2.5">
+                    <ApolloIcon className="h-5 w-5 text-foreground" />
                   </div>
                   <div className="flex-1">
                     <CardTitle>Apollo.io</CardTitle>
