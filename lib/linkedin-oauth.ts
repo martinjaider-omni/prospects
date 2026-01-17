@@ -1,10 +1,11 @@
 import prisma from './prisma'
 
+// Basic scopes available with "Sign In with LinkedIn using OpenID Connect"
+// w_member_social requires additional approval from LinkedIn
 const LINKEDIN_SCOPES = [
-  'openid',
   'profile',
   'email',
-  'w_member_social', // Post on behalf of the user
+  'openid',
 ]
 
 // Get LinkedIn OAuth configuration
