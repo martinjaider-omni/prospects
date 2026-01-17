@@ -1,0 +1,455 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==================== EMPRESAS ====================
+model Company {
+  id          String   @id @default(cuid())
+  name        String
+  domain      String?  @unique
+  website     String?
+  industry    String?
+  size        String?
+  location    String?
+  description String?
+  linkedinUrl String?
+  apolloId    String?
+
+  contacts    Contact[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ==================== CONTACTOS ====================
+model Contact {
+  id              String   @id @default(cuid())
+  firstName       String
+  lastName        String
+  email           String?
+  emailVerified   Boolean  @default(false)
+  emailStatus     EmailStatus @default(UNKNOWN)
+  phone           String?
+  phoneVerified   Boolean  @default(false)
+  linkedinUrl     String?
+  jobTitle        String?
+  department      String?
+  seniority       String?
+  location        String?
+  timezone        String?
+  apolloId        String?
+
+  companyId       String?
+  company         Company? @relation(fields: [companyId], references: [id])
+
+  tags            Tag[]    @relation("ContactTags")
+  campaigns       CampaignContact[]
+  emailThreads    EmailThread[]
+
+  source          String?  // manual, csv, apollo
+  notes           String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([email])
+  @@index([companyId])
+}
+
+enum EmailStatus {
+  UNKNOWN
+  VALID
+  INVALID
+  CATCH_ALL
+  RISKY
+}
+
+// ==================== ETIQUETAS ====================
+model Tag {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  color     String    @default("#6366f1")
+  contacts  Contact[] @relation("ContactTags")
+
+  createdAt DateTime  @default(now())
+}
+
+// ==================== CAMPAÑAS ====================
+model Campaign {
+  id          String         @id @default(cuid())
+  name        String
+  description String?
+  status      CampaignStatus @default(DRAFT)
+
+  // Platform and channel
+  platform    CampaignPlatform @default(EMAIL)
+  objective   CampaignObjective @default(SALES)
+  channel     CampaignChannel @default(OUTBOUND)
+  isDefault   Boolean @default(false)
+
+  emailAccountId String?
+  emailAccount   EmailAccount? @relation(fields: [emailAccountId], references: [id])
+
+  linkedInAccountId String?
+
+  steps       CampaignStep[]
+  contacts    CampaignContact[]
+
+  // Configuración
+  timezone    String    @default("Europe/Madrid")
+  sendingDays String[]  @default(["monday", "tuesday", "wednesday", "thursday", "friday"])
+  sendingStartHour Int  @default(9)
+  sendingEndHour   Int  @default(18)
+  dailyLimit  Int       @default(50)
+
+  // Estadísticas
+  totalSent     Int @default(0)
+  totalOpened   Int @default(0)
+  totalClicked  Int @default(0)
+  totalReplied  Int @default(0)
+  totalBounced  Int @default(0)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+enum CampaignPlatform {
+  EMAIL
+  LINKEDIN
+  INSTAGRAM
+}
+
+enum CampaignObjective {
+  SALES
+  MEETINGS
+  NETWORKING
+  RECRUITING
+}
+
+enum CampaignChannel {
+  INBOUND
+  OUTBOUND
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+// ==================== PASOS DE CAMPAÑA ====================
+model CampaignStep {
+  id          String   @id @default(cuid())
+  campaignId  String
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  order       Int
+  type        StepType @default(EMAIL)
+  subject     String?
+  body        String   @db.Text
+
+  // Tiempo de espera antes de este paso (en días)
+  delayDays   Int      @default(0)
+
+  // Condiciones
+  sendOnlyIfNoReply  Boolean @default(true)
+  sendOnlyIfNoOpen   Boolean @default(false)
+
+  // Estadísticas
+  totalSent   Int @default(0)
+  totalOpened Int @default(0)
+  totalClicked Int @default(0)
+  totalReplied Int @default(0)
+
+  emailsSent  EmailSent[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([campaignId, order])
+}
+
+enum StepType {
+  EMAIL
+  LINKEDIN_CONNECTION
+  LINKEDIN_MESSAGE
+  MANUAL_TASK
+}
+
+// ==================== CONTACTOS EN CAMPAÑA ====================
+model CampaignContact {
+  id          String   @id @default(cuid())
+  campaignId  String
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contactId   String
+  contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  status      CampaignContactStatus @default(ACTIVE)
+  currentStep Int      @default(0)
+
+  // Variables personalizadas para este contacto
+  customVariables Json?
+
+  // Fechas
+  enrolledAt  DateTime @default(now())
+  nextSendAt  DateTime?
+  completedAt DateTime?
+
+  // Razón de pausa/unsubscribe
+  pauseReason String?
+
+  emailsSent  EmailSent[]
+
+  @@unique([campaignId, contactId])
+  @@index([status])
+  @@index([nextSendAt])
+}
+
+enum CampaignContactStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  REPLIED
+  BOUNCED
+  UNSUBSCRIBED
+}
+
+// ==================== EMAILS ENVIADOS ====================
+model EmailSent {
+  id              String   @id @default(cuid())
+  campaignContactId String
+  campaignContact CampaignContact @relation(fields: [campaignContactId], references: [id], onDelete: Cascade)
+  stepId          String
+  step            CampaignStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  subject         String
+  body            String   @db.Text
+
+  // Tracking
+  messageId       String?  @unique
+  sentAt          DateTime @default(now())
+  openedAt        DateTime?
+  clickedAt       DateTime?
+  repliedAt       DateTime?
+  bouncedAt       DateTime?
+  bounceReason    String?
+
+  // Contador de aperturas y clicks
+  openCount       Int      @default(0)
+  clickCount      Int      @default(0)
+
+  @@index([messageId])
+  @@index([sentAt])
+}
+
+// ==================== HILOS DE EMAIL ====================
+model EmailThread {
+  id          String   @id @default(cuid())
+  contactId   String
+  contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  subject     String
+  messages    EmailMessage[]
+
+  status      ThreadStatus @default(OPEN)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([contactId])
+}
+
+enum ThreadStatus {
+  OPEN
+  REPLIED
+  CLOSED
+  ARCHIVED
+}
+
+model EmailMessage {
+  id          String   @id @default(cuid())
+  threadId    String
+  thread      EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  direction   MessageDirection
+  from        String
+  to          String
+  subject     String
+  body        String   @db.Text
+  bodyHtml    String?  @db.Text
+
+  messageId   String?
+  inReplyTo   String?
+
+  sentAt      DateTime @default(now())
+
+  // AI summary de este mensaje
+  aiSummary   String?
+  sentiment   String?
+
+  @@index([threadId])
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+// ==================== CUENTAS DE EMAIL ====================
+model EmailAccount {
+  id          String   @id @default(cuid())
+  name        String
+  email       String   @unique
+  type        EmailAccountType
+
+  // SMTP Config
+  smtpHost    String?
+  smtpPort    Int?
+  smtpUser    String?
+  smtpPass    String?
+  smtpSecure  Boolean  @default(true)
+
+  // IMAP Config (para recibir)
+  imapHost    String?
+  imapPort    Int?
+  imapUser    String?
+  imapPass    String?
+  imapSecure  Boolean  @default(true)
+
+  // Gmail OAuth
+  gmailAccessToken  String?
+  gmailRefreshToken String?
+  gmailTokenExpiry  DateTime?
+
+  // Configuración
+  dailyLimit  Int      @default(100)
+  sentToday   Int      @default(0)
+  isActive    Boolean  @default(true)
+  isVerified  Boolean  @default(false)
+
+  // Firma
+  signature   String?  @db.Text
+
+  campaigns   Campaign[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+enum EmailAccountType {
+  SMTP
+  GMAIL
+  OUTLOOK
+}
+
+// ==================== CUENTAS DE LINKEDIN ====================
+model LinkedInAccount {
+  id          String   @id @default(cuid())
+  name        String
+  profileUrl  String
+
+  // Credenciales (encriptadas)
+  sessionCookie String?
+
+  dailyConnectionLimit Int @default(20)
+  dailyMessageLimit    Int @default(50)
+
+  connectionsSentToday Int @default(0)
+  messagesSentToday    Int @default(0)
+
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ==================== CONFIGURACIÓN DE IA ====================
+model AIConfig {
+  id          String   @id @default(cuid())
+  provider    AIProvider @default(OPENAI)
+  apiKey      String
+  model       String   @default("gpt-4o-mini")
+
+  // Prompts personalizados
+  emailPrompt     String? @db.Text
+  followUpPrompt  String? @db.Text
+  replyPrompt     String? @db.Text
+
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+enum AIProvider {
+  OPENAI
+  ANTHROPIC
+  GOOGLE
+}
+
+// ==================== CONFIGURACIÓN DE APOLLO ====================
+model ApolloConfig {
+  id          String   @id @default(cuid())
+  apiKey      String
+  isActive    Boolean  @default(true)
+
+  // Límites
+  dailySearchLimit    Int @default(100)
+  dailyEnrichLimit    Int @default(50)
+  searchesToday       Int @default(0)
+  enrichmentsToday    Int @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ==================== PLANTILLAS DE EMAIL ====================
+model EmailTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  subject     String
+  body        String   @db.Text
+
+  category    String?
+
+  // Variables disponibles: {{firstName}}, {{lastName}}, {{company}}, {{jobTitle}}, etc.
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ==================== IMPORTACIONES ====================
+model Import {
+  id          String   @id @default(cuid())
+  filename    String
+  status      ImportStatus @default(PENDING)
+
+  totalRows   Int      @default(0)
+  processedRows Int    @default(0)
+  successRows Int      @default(0)
+  errorRows   Int      @default(0)
+
+  // Mapeo de columnas
+  columnMapping Json?
+
+  errors      Json?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime @default(now())
+}
+
+enum ImportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
