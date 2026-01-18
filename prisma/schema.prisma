@@ -102,6 +102,7 @@ model Campaign {
   // Legacy steps (backwards compatibility)
   steps       CampaignStep[] @relation("CampaignSteps")
   contacts    CampaignContact[]
+  emailThreads EmailThread[]
 
   // Campaign-level prompts
   productPrompt     String?  @db.Text  // Describe your product/service
@@ -368,15 +369,24 @@ model EmailThread {
   contactId   String
   contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
+  // Campaign and account relations
+  campaignId     String?
+  campaign       Campaign? @relation(fields: [campaignId], references: [id])
+  emailAccountId String?
+  emailAccount   EmailAccount? @relation(fields: [emailAccountId], references: [id])
+
   subject     String
   messages    EmailMessage[]
 
   status      ThreadStatus @default(OPEN)
+  isStarred   Boolean  @default(false)
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@index([contactId])
+  @@index([campaignId])
+  @@index([emailAccountId])
 }
 
 enum ThreadStatus {
@@ -402,6 +412,7 @@ model EmailMessage {
   inReplyTo   String?
 
   sentAt      DateTime @default(now())
+  isRead      Boolean  @default(false)
 
   // AI summary de este mensaje
   aiSummary   String?
@@ -450,7 +461,8 @@ model EmailAccount {
   // Firma
   signature   String?  @db.Text
 
-  campaigns   Campaign[]
+  campaigns    Campaign[]
+  emailThreads EmailThread[]
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
